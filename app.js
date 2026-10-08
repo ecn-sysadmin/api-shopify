@@ -4,6 +4,7 @@ try { require('dotenv').config(); } catch { /* En GoDaddy usamos las variables d
 const crypto = require('crypto');
 const express = require('express');
 const { llamarRestlet, suiteql } = require('./netsuite');
+const { metacamposCliente } = require('./shopifyclient');
 
 const app = express();
 
@@ -241,7 +242,19 @@ router.post('/webhooks/shopify/orders-create', async (req, res) => {
 	const orden = req.body || {};
 
 	try {
-		const r = await llamarRestlet(resumirOrden(orden));
+		const payload = resumirOrden(orden);
+
+		// Metacampos del cliente; si fallan, la orden se registra de todos modos
+		try {
+			payload.customer.metafields = await metacamposCliente(orden.customer && orden.customer.id);
+			// console.log('[Shopify] Metacampos del cliente:', payload.customer.metafields);
+		} catch (e) {
+			console.error('[Shopify] No se pudieron leer los metacampos:', e.message);
+			payload.customer.metafields = {};
+		}
+
+		const r = await llamarRestlet(payload);
+
 		if (r.ok) {
 			console.log(`[Shopify] ${orden.name} -> OV ${r.ordenId}${r.existente ? ' (ya existía)' : ''}`);
 		} else {

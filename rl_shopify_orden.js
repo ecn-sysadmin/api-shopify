@@ -15,21 +15,27 @@ define(['N/record', 'N/search', 'N/log', 'N/runtime'], (record, search, log, run
 
 	// ─── AJUSTAR ──────────────────────────────────────────────────────────
 	const CONFIG = {
-		FORMULARIO_OC: 341,        // customForm que usaba la app
-		UBICACION: 110,            // location
-		CODIGO_IMPUESTO: 1,        // taxCode (IVA 16%)
+		FORMULARIO_OC: 341,					// customForm que usaba la app
+		DEPARTAMENTO: 10,						// department
+		UBICACION: 110,						// location
+		CODIGO_IMPUESTO: 1,					// taxCode (IVA 16%)
 		IMPUESTOS: {
 			'0.16': 1,
 			'0.08': 2,
 			'0': 3
 		},
-		SUBSIDIARIA: 2,         // Si la cuenta es OneWorld: ID de la subsidiaria
-		ESTADO_LEAD: null,         // Opcional: entitystatus para el cliente potencial
-		ARTICULO_ENVIO: null,      // Opcional: ID del artículo para cobrar el envío
-		ARTICULO_RESPALDO: null,   // Opcional: artículo genérico si no se encuentra el SKU
+		SUBSIDIARIA: 2,						// Si la cuenta es OneWorld: ID de la subsidiaria
+		ESTADO_LEAD: null,					// Opcional: entitystatus para el cliente potencial
+		ARTICULO_ENVIO: null,				// Opcional: ID del artículo para cobrar el envío
+		ARTICULO_RESPALDO: null,			// Opcional: artículo genérico si no se encuentra el SKU
 
-		CAMPO_FECHA_ENTREGA: 'enddate',  // Cambia por el ID que viste en el formulario
+		CAMPO_FECHA_ENTREGA: 'enddate',		// Cambia por el ID que viste en el formulario
 		DIAS_ENTREGA: 0,
+
+		REGIMEN_FISCAL: 1,					// Cliente Nacional
+		NEXUSCOUNTRY_DEFAULT: 'MX',			// México
+		NEXUS_DEFAULT: 1,					// México
+		RFC_GENERICO: 'XAXX010101000',		// PUBLICO EN GENERAL
 	};
 	// ──────────────────────────────────────────────────────────────────────
 
@@ -135,6 +141,7 @@ define(['N/record', 'N/search', 'N/log', 'N/runtime'], (record, search, log, run
 			const id = buscarUno(search.Type.CUSTOMER, [['companyname', 'is', empresa], 'AND', ['isinactive', 'is', 'F']]);
 			if (id) return id;
 		}
+
 		return null;
 	}
 
@@ -146,8 +153,10 @@ define(['N/record', 'N/search', 'N/log', 'N/runtime'], (record, search, log, run
 
 		const rec = record.create({ type: record.Type.LEAD, isDynamic: true });
 
-		if (CONFIG.SUBSIDIARIA) rec.setValue({ fieldId: 'subsidiary', value: CONFIG.SUBSIDIARIA });
 
+		// ======================================
+		// Información principal
+		// ======================================
 		if (!vacio(empresa)) {
 			rec.setValue({ fieldId: 'isperson', value: 'F' });
 			rec.setValue({ fieldId: 'companyname', value: empresa });
@@ -156,15 +165,15 @@ define(['N/record', 'N/search', 'N/log', 'N/runtime'], (record, search, log, run
 			rec.setValue({ fieldId: 'firstname', value: nombre });
 			rec.setValue({ fieldId: 'lastname', value: apellido });
 		}
+		if (CONFIG.ESTADO_LEAD) rec.setValue({ fieldId: 'entitystatus', value: CONFIG.ESTADO_LEAD });
 
+		
+		// ======================================
+		// Correo electrónico | Teléfono | Dirección
+		// ======================================
 		if (!vacio(o.email)) rec.setValue({ fieldId: 'email', value: o.email });
 		// El teléfono va en el cliente, porque el formulario de dirección de México no lo muestra
 		if (!vacio(o.phone)) rec.setValue({ fieldId: 'phone', value: o.phone });
-		if (CONFIG.ESTADO_LEAD) rec.setValue({ fieldId: 'entitystatus', value: CONFIG.ESTADO_LEAD });
-
-		if (o.customer && o.customer.id) {
-			rec.setValue({ fieldId: 'externalid', value: 'shopify_cust_' + o.customer.id });
-		}
 
 		// Dirección predeterminada
 		rec.selectNewLine({ sublistId: 'addressbook' });
@@ -173,6 +182,48 @@ define(['N/record', 'N/search', 'N/log', 'N/runtime'], (record, search, log, run
 		const dir = rec.getCurrentSublistSubrecord({ sublistId: 'addressbook', fieldId: 'addressbookaddress' });
 		llenarDireccion(dir, dirFact);
 		rec.commitLine({ sublistId: 'addressbook' });
+		
+
+		// ======================================
+		// Clasificación
+		// ======================================
+		if (CONFIG.SUBSIDIARIA) rec.setValue({ fieldId: 'subsidiary', value: CONFIG.SUBSIDIARIA });
+
+		
+		// ======================================
+		// Otra info
+		// ======================================
+		rec.setValue({ fieldId: 'custentity_fte_entity_l_taxregime', value: 1 });
+
+		if (o.customer && o.customer.id) {
+			rec.setValue({ fieldId: 'externalid', value: 'shopify_cust_' + o.customer.id });
+		}
+
+
+		// ======================================
+		// Finanzas -> Registros fiscales
+		// ======================================
+		try{
+			const mf = (o.customer && o.customer.metafields) || {};
+			const rfc = mf['custom.rfc'];
+			
+			//log.audit('[TAXREGISTRATION]: ', `RFC: ${rfc}, COUNTRY: ${dirFact.country_code || CONFIG.NEXUSCOUNTRY_DEFAULT}, NEXUS: ${CONFIG.NEXUS_DEFAULT}`);
+
+			if(!vacio(rfc)){
+				//rec.setValue({ fieldId: 'custentity_mx_rfc', value: rfc });
+
+				rec.selectNewLine({ sublistId: 'taxregistration' });
+				rec.setCurrentSublistValue({ sublistId: 'taxregistration', fieldId: 'nexuscountry', value: dirFact.country_code || CONFIG.NEXUSCOUNTRY_DEFAULT });
+				rec.setCurrentSublistValue({ sublistId: 'taxregistration', fieldId: 'nexus', value: CONFIG.NEXUS_DEFAULT });
+				rec.setCurrentSublistValue({ sublistId: 'taxregistration', fieldId: 'taxregistrationnumber', value: rfc });
+				rec.commitLine({ sublistId: 'taxregistration' });
+			}else{
+				log.error('[RFC] No se registro el rfc: ', `${rfc}`);
+			}
+		} catch (e) {
+			log.error('No se pudo agregar el registro fiscal', e.message);
+		}
+
 
 		return rec.save();
 	}
@@ -193,6 +244,10 @@ define(['N/record', 'N/search', 'N/log', 'N/runtime'], (record, search, log, run
 			defaultValues: { customform: CONFIG.FORMULARIO_OC, entity: clienteId },
 		});
 
+
+		// ======================================
+		// Información principal
+		// ======================================
 		so.setValue({ fieldId: 'externalid', value: externalId });
 		so.setValue({ fieldId: 'otherrefnum', value: o.name });  // Ej. "#ECN Express1508"
 
@@ -204,13 +259,22 @@ define(['N/record', 'N/search', 'N/log', 'N/runtime'], (record, search, log, run
 		var memo =	`Transacción realizada por: ${o.gateway}\n` +
 					`${getDireccion_text(dirFact, o)}`;
 
-		so.setValue({ fieldId: 'location', value: CONFIG.UBICACION });
 		if (!vacio(o.gateway)) so.setValue({ fieldId: 'memo', value: memo });
 		if (!vacio(o.email)) so.setValue({ fieldId: 'email', value: o.email });
 
 		so.setValue({ fieldId: 'custbody17', value: true }); // ¿Es de Shopify?
 
+		
+		// ======================================
+		// Clasificación
+		// ======================================
+		so.setValue({ fieldId: 'department', value: CONFIG.DEPARTAMENTO });
+		so.setValue({ fieldId: 'location', value: CONFIG.UBICACION });
+
+
+		// ======================================
 		// Artículos
+		// ======================================
 		(o.line_items || []).forEach((l) => {
 			const itemId = buscarArticulo(l.sku);
 			if (!itemId) throw new Error('No se encontró el artículo con SKU "' + l.sku + '" (' + l.title + ')');
@@ -228,26 +292,41 @@ define(['N/record', 'N/search', 'N/log', 'N/runtime'], (record, search, log, run
 			so.setCurrentSublistValue({ sublistId: 'item', fieldId: 'location', value: CONFIG.UBICACION });
 			so.commitLine({ sublistId: 'item' });
 		});
+		
 
-		// Envío (opcional)
-		if (CONFIG.ARTICULO_ENVIO && Number(o.shipping_total) > 0) {
-			so.selectNewLine({ sublistId: 'item' });
-			so.setCurrentSublistValue({ sublistId: 'item', fieldId: 'item', value: CONFIG.ARTICULO_ENVIO });
-			so.setCurrentSublistValue({ sublistId: 'item', fieldId: 'quantity', value: 1 });
-			so.setCurrentSublistValue({ sublistId: 'item', fieldId: 'rate', value: Number(o.shipping_total) });
-			so.setCurrentSublistValue({ sublistId: 'item', fieldId: 'taxcode', value: CONFIG.CODIGO_IMPUESTO });
-			so.commitLine({ sublistId: 'item' });
-		}
-
-		// Direcciones de la OC
-		if (o.billing_address) {
-			llenarDireccion(so.getSubrecord({ fieldId: 'billingaddress' }), o.billing_address);
-		}
+		// ======================================
+		// Envío -> Dirección de envío
+		// ======================================
 		if (o.shipping_address) {
 			llenarDireccion(so.getSubrecord({ fieldId: 'shippingaddress' }), o.shipping_address);
 		}
 
+
+		// ======================================
+		// Envío -> Dirección de facturación
+		// ======================================
+		if (o.billing_address) {
+			llenarDireccion(so.getSubrecord({ fieldId: 'billingaddress' }), o.billing_address);
+		}
+
 		return so.save();
+	}
+
+	function normalizarRfc(rfc) {
+		return String(rfc || '').toUpperCase().replace(/[\s-]/g, '');
+	}
+	
+	function clientePorRfc(rfc) {
+		const r = normalizarRfc(rfc);
+		if(!r) return null;
+
+		const s = search.load({ id: 'customsearch_cliente_por_rfc' });
+		s.filterExpression = JSON.parse(
+			JSON.stringify(s.filterExpression).replace(/RFC_BUSCADO/g, JSON.stringify(r).slice(1, -1))
+		);
+
+		const res = s.run().getRange({ start: 0, end: 1 });
+		return res.length ? res[0].id : null;
 	}
 
 	const post = (o) => {
@@ -275,15 +354,30 @@ define(['N/record', 'N/search', 'N/log', 'N/runtime'], (record, search, log, run
 
 			const empresa = (o.billing_address && o.billing_address.company) || '';
 			let clienteId = 21912; // 21912 -> PUBLICO EN GENERAL;
-			if(syncClientes) clienteId = buscarCliente(o.email, empresa);
-			const clienteNuevo = !clienteId;
-			if (clienteNuevo) {
-				clienteId = crearCliente(o);
+
+			var clienteNuevo = null;
+			if(syncClientes) {
+				const mf = (o.customer && o.customer.metafields) || {};
+				const rfc = mf['custom.rfc'] || undefined;
+
+				clienteId = buscarCliente(o.email, empresa);
+				clienteNuevo = !clienteId;
+
+				if (clienteNuevo) {
+					const existente = clientePorRfc(rfc);
+					
+					if(existente){
+						log.audit('RFC ya registrado', `RFC ${rfc} pertenece al cliente ${existente}`);
+						clienteId = existente;
+					} else {
+						clienteId = crearCliente(o);
+					}
+				}
 			}
 
 			const ordenId = crearOrden(clienteId, o, externalId);
 
-			log.audit('Orden creada', `Shopify ${o.name} -> OV ${ordenId}, cliente ${clienteId}${clienteNuevo ? ' (nuevo)' : ''}`);
+			log.audit('Orden creada', `Shopify ${o.name} -> OV ${ordenId}, cliente ${clienteId} ${clienteNuevo ? '(nuevo)' : ''}`);
 			return { ok: true, clienteId, clienteNuevo, ordenId };
 		} catch (e) {
 			log.error('Error procesando orden ' + (o && o.name), e);
